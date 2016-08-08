@@ -83,10 +83,13 @@ for (var code in codes) {
 exports.Server = tcp.Server.extend(function Server (options) {
   tcp.Server.call(this, options)
   this.concurrent = 0
+  if (options.handle) {
+    this.handle = options.handle
+  }
 }, {
   handle: function (transfer) {
     transfer.response['Content-Type'] = 'text/html'
-    transfer.send('Hello World!')
+    transfer.send('ERROR: No transfer handler set.')
   }
 }, {
   Events: tcp.Server.Events.extend(function HttpEvents () {}, {
@@ -105,8 +108,7 @@ exports.Server = tcp.Server.extend(function Server (options) {
         if (transfer.body) {
           transfer.body += chunk
         } else {
-          chunk = chunk.toString()
-          var lines = chunk.split(/\r\n/)
+          var lines = chunk.toString().split('\r\n')
           var count = lines.length
           for (var index = 0; index < count; index++) {
             var line = lines[index]
