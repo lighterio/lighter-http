@@ -80,7 +80,7 @@ for (var code in codes) {
  *
  * @return {Object}           An HTTP server.
  */
-exports.Server = tcp.Server.extend(function Server (options) {
+var Server = exports.Server = tcp.Server.extend(function Server (options) {
   tcp.Server.call(this, options)
   this.concurrent = 0
   if (options.handle) {
@@ -157,3 +157,7 @@ exports.Server = tcp.Server.extend(function Server (options) {
     }
   })
 })
+
+exports.serve = function (options) {
+  return new Server(options)
+}

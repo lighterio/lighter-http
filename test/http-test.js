@@ -4,15 +4,21 @@ var port = 31267
 var url = 'http://127.0.0.1:' + port + '/'
 var lighterHttp = require('../lighter-http')
 
-var server = new lighterHttp.Server({port: port})
+var content = 'Hello World!'
+
+lighterHttp.serve({
+  port: port,
+  handle: function (transfer) {
+    transfer.send(content)
+  }
+})
 
 describe('Lighter HTTP', function () {
   it('responds', function (done) {
-    is.object(server)
     http.get(url, function (response, data) {
       http.get(url, function (response, data) {
         response.on('data', function (chunk) {
-          is(chunk.toString(), 'Hello World!')
+          is(chunk.toString(), content)
           done()
         })
       })
