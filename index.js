@@ -1,5 +1,5 @@
-var http = require('http')
-var lighterHttp = require('lighter-http')
+process.isLighterTcpMaster = true
+var http = require('lighter-http')
 var cluster = require('cluster')
 var cpus = require('os').cpus().length
 var content =
@@ -28,18 +28,12 @@ if (cluster.isMaster) {
     cluster.fork()
   }
 } else {
-  lighterHttp.serve({
+  http.serve({
     port: 8124,
+    isWorker: true,
     handle: function (transfer) {
       transfer.response['Content-Type'] = 'text/html'
       transfer.send(content)
     }
   })
-
-  http
-    .createServer(function (request, response) {
-      response.writeHead(200, {'content-type': 'text/html'})
-      response.end(content)
-    })
-    .listen(8125)
 }
