@@ -68,8 +68,7 @@ var codes = {
 
 var heads = {}
 for (var code in codes) {
-  heads[code] = 'HTTP/1.1 ' + code + ' ' + codes[code] +
-    '\r\nConnection:keep-alive'
+  heads[code] = 'HTTP/1.1 ' + code + ' ' + codes[code]
 }
 
 /**
@@ -92,71 +91,92 @@ var Server = exports.Server = tcp.Server.extend(function Server (options) {
     transfer.send('ERROR: No transfer handler set.')
   }
 }, {
-  Events: tcp.Server.Events.extend(function HttpEvents () {}, {
+  Events: tcp.Server.Events.extend(function () {}, {
     connection: function (transfer) {
-      var self = this
-
-      transfer.on('data', function (chunk) {
-        // Open a new transfer if it's not open.
-        if (!transfer._transferring) {
-          self.concurrent++
-          transfer._transferring = true
-          transfer.request = {}
-          transfer.body = ''
-          transfer.response = {}
-        }
-        if (transfer.body) {
-          transfer.body += chunk
-        } else {
-          var lines = chunk.toString().split('\r\n')
-          var count = lines.length
-          for (var index = 0; index < count; index++) {
-            var line = lines[index]
-
-            // Continue until there's an empty line.
-            if (line) {
-              // Treat each line after the 1st as a header.
-              if (index) {
-                var colon = line.indexOf(':')
-                var name = line.substr(0, colon).toLowerCase()
-                var value = line.substr(colon + 1).trim()
-                transfer.request[name] = value
-              } else {
-                var parts = line.split(/\s+/)
-                transfer.method = parts[0]
-                transfer.url = parts[1]
-                transfer.version = parts[2]
-              }
-            } else {
-              break
-            }
-          }
-          // If we've broken on an empty line, the data comes next.
-          if (index < count) {
-            transfer.body = lines.slice(index).join('\r\n')
-            transfer.status = 200
-            self.handle(transfer)
-          }
-        }
-      })
 
       // Ignore hangups.
       transfer.on('error', function () {})
-
-      transfer.send = function (text) {
-        var status = transfer.status
-        var response = transfer.response
-        var head = heads[status]
-        for (var key in response) {
-          head += '\r\n' + key + ':' + response[key]
-        }
-        transfer.write(head + '\r\nContent-Length:' + text.length + '\r\n\r\n' + text)
-        transfer._transferring = false
-        self.concurrent--
-      }
     }
   })
 })
+
+var Request = exports.Request = tcp.Socket.extend(function () {
+
+}, {
+
+})
+
+var Transfer = exports.Transfer = tcp.Socket.extend({
+
+  end: function end (text) {
+    var request = this.request
+    var response = this.response
+    var head = heads[this.status]
+    head += '\r\nDate: ' + (new Date()).toUTCString()
+    if (request.connection === 'keep-alive') {
+      head += '\r\nConnection: keep-alive'
+    }
+    for (var key in response) {
+      head += '\r\n' + key + ': ' + response[key]
+    }
+    this.write(head + '\r\nContent-Length: ' + text.length + '\r\n\r\n' + text)
+    this._transferring = false
+    this.server.concurrent--
+  }
+
+}, {
+
+  Events: tcp.Server.Events.extend(function () {}, {
+    data: function (chunk) {
+      var self = this
+      var server = this.server
+      // Open a new transfer if it's not open.
+      if (!self._transferring) {
+        server.concurrent++
+        self._transferring = true
+        self.request = {}
+        self.body = ''
+        self.response = {}
+        self._events = new this.constructor.Events()
+      }
+      if (self.body) {
+        self.body += chunk
+      } else {
+        var lines = chunk.toString().split('\r\n')
+        var count = lines.length
+        for (var index = 0; index < count; index++) {
+          var line = lines[index]
+
+          // Continue until there's an empty line.
+          if (line) {
+            // Treat each line after the 1st as a header.
+            if (index) {
+              var colon = line.indexOf(':')
+              var name = line.substr(0, colon).toLowerCase()
+              var value = line.substr(colon + 1).trim()
+              self.request[name] = value
+            } else {
+              var parts = line.split(/\s+/)
+              self.method = parts[0]
+              self.url = parts[1]
+            }
+          } else {
+            break
+          }
+        }
+        // If we've broken on an empty line, the data comes next.
+        if (index < count) {
+          self.body = lines.slice(index).join('\r\n')
+          self.status = 200
+          server.handle(self)
+        }
+      }
+    }
+  })
+
+})
+
+Server.Socket = Transfer
 
 exports.serve = function (options) {
   return new Server(options)

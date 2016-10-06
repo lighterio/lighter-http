@@ -9,7 +9,7 @@ var content = 'Hello World!'
 lighterHttp.serve({
   port: port,
   handle: function (transfer) {
-    transfer.send(content)
+    transfer.end(content)
   }
 })
 

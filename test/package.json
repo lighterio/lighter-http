@@ -9,7 +9,8 @@
       "xit",
       "is",
       "mock",
-      "unmock"
+      "unmock",
+      "bench"
     ]
   }
 }

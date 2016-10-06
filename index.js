@@ -1,25 +1,15 @@
 process.isLighterTcpMaster = true
-var http = require('lighter-http')
+var http = require('http')
+var lite = require('lighter-http')
 var cluster = require('cluster')
 var cpus = require('os').cpus().length
 var content =
   '<html>\n' +
   '<head>\n' +
-  '<title>Lighter HTTP Hello World!</title>\n' +
+  '<title>Hello World!</title>\n' +
   '</head>\n' +
-  '<body bgcolor=white>\n' +
-  '<table border="0">\n' +
-  '<tr>\n' +
-  '<td>\n' +
-  '<img src="http://lighter.io/lighter.svg">\n' +
-  '</td>\n' +
-  '<td>\n' +
-  '<h1>Sample Application Server</h1>\n' +
-  'This is the output of a server that is part of\n' +
-  'the Hello, World application.\n' +
-  '</td>\n' +
-  '</tr>\n' +
-  '</table>\n' +
+  '<h1>HTTP Test</h1>\n' +
+  '<p>This page is for latency and throughput testing purposes.</p>\n' +
   '</body>\n' +
   '</html>\n'
 
@@ -28,12 +18,17 @@ if (cluster.isMaster) {
     cluster.fork()
   }
 } else {
-  http.serve({
-    port: 8124,
+  http.createServer(function (request, response) {
+    response.setHeader('Content-Type', 'text/html')
+    response.end(content)
+  }).listen(8124)
+
+  lite.serve({
+    port: 8125,
     isWorker: true,
     handle: function (transfer) {
       transfer.response['Content-Type'] = 'text/html'
-      transfer.send(content)
+      transfer.end(content)
     }
   })
 }
