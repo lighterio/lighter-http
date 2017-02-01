@@ -2,7 +2,7 @@ process.isLighterTcpMaster = true
 var http = require('http')
 var lite = require('lighter-http')
 var cluster = require('cluster')
-var cpus = require('os').cpus().length
+var cpus = 1 // require('os').cpus().length
 var content =
   '<html>\n' +
   '<head>\n' +

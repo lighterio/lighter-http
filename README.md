@@ -3,7 +3,7 @@
 [![Version](https://img.shields.io/npm/v/lighter-http.svg)](//www.npmjs.com/package/lighter-http)
 [![Downloads](https://img.shields.io/npm/dm/lighter-http.svg)](//www.npmjs.com/package/lighter-http)
 [![Build](https://img.shields.io/travis/lighterio/lighter-http.svg)](//travis-ci.org/lighterio/lighter-http)
-[![Coverage](https://img.shields.io/coveralls/lighterio/lighter-http/master.svg)](//coveralls.io/r/lighterio/lighter-http)
+[![Coverage](https://img.shields.io/codecov/c/github/lighterio/lighter-http/master.svg)](//codecov.io/gh/lighterio/lighter-http)
 [![Style](https://img.shields.io/badge/code%20style-standard-brightgreen.svg)](//www.npmjs.com/package/standard)
 
 The `lighter-http` module is a lightweight TCP and HTTP library.

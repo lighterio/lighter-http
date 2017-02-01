@@ -7,11 +7,11 @@ var lighterHttp = require('../lighter-http')
 var content = 'Hello World!'
 
 lighterHttp.serve({
-  port: port,
-  handle: function (transfer) {
-    transfer.end(content)
-  }
+  port: port
 })
+  .get('/', function () {
+    this.end(content)
+  })
 
 describe('Lighter HTTP', function () {
   it('responds', function (done) {
