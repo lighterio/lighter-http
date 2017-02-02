@@ -1,8 +1,8 @@
-process.isLighterTcpMaster = true
+// process.isLighterTcpMaster = true
 var http = require('http')
 var lite = require('lighter-http')
 var cluster = require('cluster')
-var cpus = 1 // require('os').cpus().length
+var cpus = 4 // require('os').cpus().length
 var content =
   '<html>\n' +
   '<head>\n' +
@@ -22,13 +22,13 @@ if (cluster.isMaster) {
     response.setHeader('Content-Type', 'text/html')
     response.end(content)
   }).listen(8124)
+  console.log('http://127.0.0.1:8124 (http)')
 
   lite.serve({
     port: 8125,
-    isWorker: true,
-    handle: function (transfer) {
-      transfer.response['Content-Type'] = 'text/html'
-      transfer.end(content)
-    }
+    isWorker: true
+  }).get('/', function () {
+    this.end(content)
   })
+  console.log('http://127.0.0.1:8125 (lighter-http)')
 }

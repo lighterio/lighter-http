@@ -1,3 +1,8 @@
+'use strict'
+
+// Support mocha.
+var bench = global.bench || function () {}
+
 var http = require('http')
 var lite = require('../lighter-http')
 var httpPort = 9881

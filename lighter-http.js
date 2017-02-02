@@ -3,12 +3,13 @@
 var mime = require('lighter-mime')
 var tcp = require('lighter-tcp')
 var Type = require('lighter-type')
+var Flagger = require('lighter-flagger')
 var Cache = require('lighter-lru-cache')
 // var multipart = require('./multipart')
 var doNothing = function () {}
 
 // Maximum number of bytes we can receive (to avoid storage attacks).
-var MAX_BYTES = 1e8 // ~100MB.
+// var MAX_BYTES = 1e8 // ~100MB.
 
 /**
  * Turn a string into a RegExp pattern if it has asterisks.
@@ -104,18 +105,20 @@ for (var code in codes) {
  * @return {Object}           An HTTP server.
  */
 var Server = exports.Server = tcp.Server.extend(function Server (options) {
-  var transfer = Transfer.prototype
+  var transfer = this.constructor.Transfer.prototype
   tcp.Server.call(this, options)
   this.routes = {
     GET: {'/BEAM': transfer._beamGet},
     POST: {'/BEAM': transfer._beamPost}
+  }
+  this.routes = {
+    GET: {}
   }
   this.steps = []
   this.views = {}
   this.beams = new Beams(this)
   this.concurrent = 0
 }, {
-
   /**
    * Consumers see that this server uses transfer instead of request & response.
    */
@@ -192,33 +195,68 @@ var Server = exports.Server = tcp.Server.extend(function Server (options) {
   beam: function beam (name, fn) {
     this.on('beam:' + name, fn)
   }
-
 }, {
-
   Events: tcp.Server.Events.extend(function Events () {}, {
-    connection: function (transfer) {
+    connection: function (socket) {
       // Ignore hangups.
-      transfer.on('error', doNothing)
+      socket.on('error', doNothing)
     }
   })
-
 })
 
-var Transfer = exports.Transfer = tcp.Socket.extend({
+Server.Socket = exports.Socket = tcp.Socket.extend({
+}, {
+  Events: tcp.Server.Events.extend(function Events () {}, {
+    data: function data (chunk) {
+      // Continue or start a transfer.
+      var transfer = this.transfer
+      if (!transfer) {
+        transfer = this.transfer = new this.server.constructor.Transfer(this)
+        this.server.concurrent++
+      }
 
-  _init: function _init () {
-    this.server.concurrent++
-    this._start = Date.now()
-    this._transferring = true
-    this._headerSent = false
-    this.request = {}
-    this.response = {}
-    this._events = new Transfer.Events()
-    this.state = new Transfer.State()
-    this._step = 0
-    this.status = 200
-    this.body = ''
-  },
+      var lines = chunk.toString().split('\r\n')
+      for (var i = 0, l = lines.length; i < l; i++) {
+        var line = lines[i]
+        // Continue until there's an empty line.
+        if (line) {
+          // Treat each line after the 1st as a header.
+          if (i) {
+            var colon = line.indexOf(':')
+            var name = line.substr(0, colon).toLowerCase()
+            var value = line.substr(colon + 1).trim()
+            transfer.request[name] = value
+          } else {
+            var parts = line.split(/\s+/)
+            transfer.method = parts[0]
+            var url = transfer.url = parts[1]
+            parts = url.split('?')
+            transfer.path = parts[0]
+            transfer.query = parseQuery(parts[1])
+          }
+        // The body comes after an empty line.
+        } else {
+          this.transfer = undefined
+          transfer.body = lines.slice(i + 1).join('\r\n')
+          return transfer.next()
+        }
+      }
+    }
+  })
+})
+
+Server.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
+  this.socket = socket
+  this._start = Date.now()
+  this._headerSent = false
+  this.request = {}
+  this.response = {}
+  this._events = new Transfer.Events()
+  this.state = new Transfer.State()
+  this._step = 0
+  this.status = 200
+  this.body = ''
+}, {
 
   _getHeader: function _getHeader () {
     var request = this.request
@@ -241,7 +279,7 @@ var Transfer = exports.Transfer = tcp.Socket.extend({
   next: function next () {
     var ok
     do {
-      var fn = this.server.steps[this._step++]
+      var fn = this.socket.server.steps[this._step++]
       if (!fn) {
         return this._finish()
       }
@@ -252,7 +290,7 @@ var Transfer = exports.Transfer = tcp.Socket.extend({
   _finish: function _finish () {
     var method = this.method
     var path = this.path
-    var routes = this.server.routes
+    var routes = this.socket.server.routes
 
     // TODO: Support CONNECT/OPTIONS/TRACE.
     if (method === 'HEAD') {
@@ -294,13 +332,20 @@ var Transfer = exports.Transfer = tcp.Socket.extend({
   },
 
   end: function end (text) {
-    if (!this._headerSent) {
+    var socket = this.socket
+    var server = socket.server
+    text = text || ''
+
+    // Write headers first if necessary.
+    if (this._headerSent === false) {
       this.response['Content-Length'] = text.length
+      text = this._getHeader() + text
+      this._headerSent = true
     }
-    this.write(text || '')
-    this._transferring = false
-    if (!--this.server.concurrent) {
-      this.emit('idle')
+
+    socket.write(text)
+    if (!--server.concurrent) {
+      server.emit('idle')
     }
   },
 
@@ -311,7 +356,7 @@ var Transfer = exports.Transfer = tcp.Socket.extend({
    * @param  {Object} data  Data to pass to the view function.
    */
   view: function (name, data) {
-    var views = this.server.views
+    var views = this.socket.server.views
     if (!views[name]) {
       throw new Error('View "' + name + '" not found.')
     }
@@ -384,49 +429,8 @@ var Transfer = exports.Transfer = tcp.Socket.extend({
     this.end('OK')
     return this
   }
-
 }, {
-
-  Events: tcp.Server.Events.extend(function Events () {}, {
-    data: function (chunk) {
-      // Start or restart a transfer.
-      if (!this._transferring) {
-        this._init()
-      }
-
-      if (this.body) {
-        this.body += chunk
-      } else {
-        var lines = chunk.toString().split('\r\n')
-        var count = lines.length
-        for (var index = 0; index < count; index++) {
-          var line = lines[index]
-          // Continue until there's an empty line.
-          if (line) {
-            // Treat each line after the 1st as a header.
-            if (index) {
-              var colon = line.indexOf(':')
-              var name = line.substr(0, colon).toLowerCase()
-              var value = line.substr(colon + 1).trim()
-              this.request[name] = value
-            } else {
-              var parts = line.split(/\s+/)
-              this.method = parts[0]
-              var url = this.url = parts[1]
-              parts = url.split('?')
-              this.path = parts[0]
-              this.query = parseQuery(parts[1])
-            }
-          // The body comes after an empty line.
-          } else {
-            this.body = lines.slice(index + 1).join('\r\n')
-            this.next()
-          }
-        }
-      }
-    }
-  }),
-
+  Events: Type.extend(function Events () {}),
   State: Type.extend(function State () {})
 })
 
@@ -435,8 +439,6 @@ var Beams = Cache.extend(function Beams (server) {
   this.server = server
   this.n = 0
 })
-
-Server.Socket = Transfer
 
 exports.serve = function (options) {
   var server = new Server(options)
