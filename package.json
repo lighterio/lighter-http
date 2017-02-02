@@ -3,6 +3,7 @@
   "version": "0.0.2",
   "description": "A faster HTTP server and client.",
   "dependencies": {
+    "lighter-flagger": "^1.2.1",
     "lighter-lru-cache": "^1.1.0",
     "lighter-mime": "^1.0.0",
     "lighter-tcp": "^0.0.2",
