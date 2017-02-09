@@ -1,12 +1,15 @@
 'use strict'
 
+var http = require('http')
 var mime = require('lighter-mime')
 var tcp = require('lighter-tcp')
-var Type = require('lighter-type')
 var Flagger = require('lighter-flagger')
 var Cache = require('lighter-lru-cache')
+var Type = require('lighter-type')
 // var multipart = require('./multipart')
 var doNothing = function () {}
+var BEAM = 'BEAM:'
+var beamTimeout = 3e4
 
 // Maximum number of bytes we can receive (to avoid storage attacks).
 // var MAX_BYTES = 1e8 // ~100MB.
@@ -27,70 +30,7 @@ function patternify (str, start, end) {
   return str
 }
 
-var codes = {
-  100: 'Continue',
-  101: 'Switching Protocols',
-  102: 'Processing',
-  200: 'OK',
-  201: 'Created',
-  202: 'Accepted',
-  203: 'Non-Authoritative Information',
-  204: 'No Content',
-  205: 'Reset Content',
-  206: 'Partial Content',
-  207: 'Multi-Status',
-  208: 'Already Reported',
-  226: 'IM Used',
-  300: 'Multiple Choices',
-  301: 'Moved Permanently',
-  302: 'Found',
-  303: 'See Other',
-  304: 'Not Modified',
-  305: 'Use Proxy',
-  307: 'Temporary Redirect',
-  308: 'Permanent Redirect',
-  400: 'Bad Request',
-  401: 'Unauthorized',
-  402: 'Payment Required',
-  403: 'Forbidden',
-  404: 'Not Found',
-  405: 'Method Not Allowed',
-  406: 'Not Acceptable',
-  407: 'Proxy Authentication Required',
-  408: 'Request Timeout',
-  409: 'Conflict',
-  410: 'Gone',
-  411: 'Length Required',
-  412: 'Precondition Failed',
-  413: 'Payload Too Large',
-  414: 'URI Too Long',
-  415: 'Unsupported Media Type',
-  416: 'Range Not Satisfiable',
-  417: 'Expectation Failed',
-  418: "I'm a teapot",
-  421: 'Misdirected Request',
-  422: 'Unprocessable Entity',
-  423: 'Locked',
-  424: 'Failed Dependency',
-  425: 'Unordered Collection',
-  426: 'Upgrade Required',
-  428: 'Precondition Required',
-  429: 'Too Many Requests',
-  431: 'Request Header Fields Too Large',
-  500: 'Internal Server Error',
-  501: 'Not Implemented',
-  502: 'Bad Gateway',
-  503: 'Service Unavailable',
-  504: 'Gateway Timeout',
-  505: 'HTTP Version Not Supported',
-  506: 'Variant Also Negotiates',
-  507: 'Insufficient Storage',
-  508: 'Loop Detected',
-  509: 'Bandwidth Limit Exceeded',
-  510: 'Not Extended',
-  511: 'Network Authentication Required'
-}
-
+var codes = http.STATUS_CODES
 var heads = {}
 for (var code in codes) {
   heads[code] = 'HTTP/1.1 ' + code + ' ' + codes[code]
@@ -105,18 +45,14 @@ for (var code in codes) {
  * @return {Object}           An HTTP server.
  */
 var Server = exports.Server = tcp.Server.extend(function Server (options) {
-  var transfer = this.constructor.Transfer.prototype
   tcp.Server.call(this, options)
   this.routes = {
-    GET: {'/BEAM': transfer._beamGet},
-    POST: {'/BEAM': transfer._beamPost}
-  }
-  this.routes = {
-    GET: {}
+    GET: {'/BEAM': beamDown},
+    POST: {'/BEAM': beamUp}
   }
   this.steps = []
   this.views = {}
-  this.beams = new Beams(this)
+  this.beams = new this.Beams(this)
   this.concurrent = 0
 }, {
   /**
@@ -193,10 +129,20 @@ var Server = exports.Server = tcp.Server.extend(function Server (options) {
   },
 
   beam: function beam (name, fn) {
-    this.on('beam:' + name, fn)
-  }
-}, {
-  Events: tcp.Server.Events.extend(function Events () {}, {
+    this.on(BEAM + name, fn)
+  },
+
+  Beams: Cache.extend(function Beams (server) {
+    Cache.call(this)
+    this.server = server
+    this.seed = 0
+  }, {
+    on: function (type, fn) {
+      this.server.on(BEAM + type, fn)
+    }
+  }),
+
+  Events: tcp.Server.prototype.Events.extend(function Events () {}, {
     connection: function (socket) {
       // Ignore hangups.
       socket.on('error', doNothing)
@@ -204,14 +150,13 @@ var Server = exports.Server = tcp.Server.extend(function Server (options) {
   })
 })
 
-Server.Socket = exports.Socket = tcp.Socket.extend({
-}, {
-  Events: tcp.Server.Events.extend(function Events () {}, {
+Server.prototype.Socket = exports.Socket = tcp.Socket.extend({
+  Events: tcp.Server.prototype.Events.extend(function Events () {}, {
     data: function data (chunk) {
       // Continue or start a transfer.
       var transfer = this.transfer
       if (!transfer) {
-        transfer = this.transfer = new this.server.constructor.Transfer(this)
+        transfer = this.transfer = new this.server.Transfer(this)
         this.server.concurrent++
       }
 
@@ -230,9 +175,14 @@ Server.Socket = exports.Socket = tcp.Socket.extend({
             var parts = line.split(/\s+/)
             transfer.method = parts[0]
             var url = transfer.url = parts[1]
-            parts = url.split('?')
-            transfer.path = parts[0]
-            transfer.query = parseQuery(parts[1])
+            if (url) {
+              parts = url.split('?')
+              transfer.path = parts[0]
+              transfer.query = parseQuery(parts[1])
+            } else {
+              var error = new Error('HTTP Parse Error: ' + chunk.toString())
+              this.emit('error', error)
+            }
           }
         // The body comes after an empty line.
         } else {
@@ -245,17 +195,19 @@ Server.Socket = exports.Socket = tcp.Socket.extend({
   })
 })
 
-Server.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
+Server.prototype.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
   this.socket = socket
-  this._start = Date.now()
-  this._headerSent = false
   this.request = {}
   this.response = {}
-  this._events = new Transfer.Events()
-  this.state = new Transfer.State()
-  this._step = 0
+  this.state = new this.State()
   this.status = 200
   this.body = ''
+  this._start = Date.now()
+  this._headerSent = false
+  this._step = 0
+  this._events = new this.Events()
+  this._steps = socket.server.steps
+  this._routes = socket.server.routes
 }, {
 
   _getHeader: function _getHeader () {
@@ -279,7 +231,7 @@ Server.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
   next: function next () {
     var ok
     do {
-      var fn = this.socket.server.steps[this._step++]
+      var fn = this._steps[this._step++]
       if (!fn) {
         return this._finish()
       }
@@ -290,7 +242,7 @@ Server.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
   _finish: function _finish () {
     var method = this.method
     var path = this.path
-    var routes = this.socket.server.routes
+    var routes = this._routes
 
     // TODO: Support CONNECT/OPTIONS/TRACE.
     if (method === 'HEAD') {
@@ -371,51 +323,17 @@ Server.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
   },
 
   beam: function (name, data) {
-    this._beamQueue.push([name, data])
+    var number = this._number = (this._number || 0) + 1
+    this._queue.push([name, data, number])
     if (!this._headerSent) {
       this.response['Access-Control-Allow-Origin'] = '*'
       this.response['Content-Type'] = 'text/json'
-      this.end(JSON.stringify(this._beamQueue))
-      this._beamQueue = []
+      this.end(JSON.stringify(this._queue))
+      this._queue = []
     }
   },
 
   _beamTimeout: 3e4,
-
-  _beamReset: function _beamReset () {
-    var self = this
-    clearTimeout(this._beamTimer)
-    this._beamTimer = setTimeout(function () {
-      self.emit('beam:timeout')
-    }, this._beamTimeout)
-  },
-
-  _beamGet: function _beamGet () {
-    var id = this.query.id
-    var beams = this.server.beams
-    var beam = beams.get(id)
-    if (!beam || (id !== beam.id)) {
-      id = this.id = 'B' + (beams.n++).toString(36)
-      beams.set(id, this)
-      this._beamQueue = []
-      this._beamReset()
-      this.beam('connect', {id: id})
-    }
-  },
-
-  _beamPost: function _beamPost () {
-    var body = this.body
-    try {
-      var list = JSON.parse(body)
-      for (var i = 0, l = list.length; i < l; i++) {
-        var data = list[i]
-        this.server.emit('beam:' + data[1], this, data[2], data[0])
-        this.send('OK')
-      }
-    } catch (e) {
-      // Couldn't parse, so call with exactly what we received.
-    }
-  },
 
   /**
    * Send a JSON response.
@@ -428,16 +346,10 @@ Server.Transfer = exports.Transfer = Flagger.extend(function Transfer (socket) {
     this.response['Content-Type'] = 'text/json'
     this.end('OK')
     return this
-  }
-}, {
+  },
+
   Events: Type.extend(function Events () {}),
   State: Type.extend(function State () {})
-})
-
-var Beams = Cache.extend(function Beams (server) {
-  Cache.call(this)
-  this.server = server
-  this.n = 0
 })
 
 exports.serve = function (options) {
@@ -455,4 +367,44 @@ function parseQuery (query) {
     }
   }
   return data
+}
+
+function resetBeam (beam) {
+  clearTimeout(beam.timer)
+  beam.timer = setTimeout(function () {
+    beam.emit(BEAM + 'timeout')
+    beam.socket.server.emit(BEAM + 'timeout')
+  }, beamTimeout)
+}
+
+function beamDown () {
+  var id = this.query.id
+  var beams = this.socket.server.beams
+  var beam = beams.get(id)
+  if (!beam || (id !== beam._id)) {
+    beams.seed = beams.seed % 1e18 + Math.floor(Math.random() * 1e12)
+    id = this._id = 'B' + beams.seed.toString(36)
+    beams.set(id, this)
+    this._queue = []
+    resetBeam(this)
+    this.beam('connect', {id: id})
+  }
+}
+
+function beamUp () {
+  var body = this.body
+  try {
+    var list = JSON.parse(body)
+    for (var i = 0, l = list.length; i < l; i++) {
+      var data = list[i]
+      var e = BEAM + data[0]
+      var n = data[1]
+      var d = data[2]
+      this.emit(e, d, this, n)
+      this.socket.server.emit(e, d, this, n)
+      this.end('OK')
+    }
+  } catch (e) {
+    this.emit('error', e)
+  }
 }

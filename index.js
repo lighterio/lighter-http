@@ -10,6 +10,9 @@ var content =
   '</head>\n' +
   '<h1>HTTP Test</h1>\n' +
   '<p>This page is for latency and throughput testing purposes.</p>\n' +
+  '<p>This page is for latency and throughput testing purposes.</p>\n' +
+  '<p>This page is for latency and throughput testing purposes.</p>\n' +
+  '<p>This page is for latency and throughput testing purposes.</p>\n' +
   '</body>\n' +
   '</html>\n'
 
